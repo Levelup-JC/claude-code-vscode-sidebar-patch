@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.bak*
+*.log
+applied-version.txt
+.DS_Store
