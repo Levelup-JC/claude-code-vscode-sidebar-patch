@@ -13,6 +13,7 @@ Patches:
   Each session's pick is kept in globalState "sessionModels" and given back
   when that session is opened again.
 - Session rows show the absolute time of the last message.
+- The Archived sessions block is hidden. The archive list and transcripts stay.
 - Sessions inside a group are ordered by last activity, newest first.
 - A session can be dropped anywhere inside a group, not only on its header.
 - The context pie no longer sends /compact. It tells you to open a new
@@ -587,6 +588,27 @@ def apply_session_sort(text: str) -> str:
     return text.replace(m.group(0), new, 1)
 
 
+def apply_hide_archived(text: str) -> str:
+    """Hide the Archived sessions block. The archive data stays on disk."""
+    if "hideArchived" in text:
+        return text
+    m = once(
+        text,
+        re.compile(r'(\w+)\.archived\.length>0&&k\('),
+        "archived block",
+    )
+    text = text.replace(
+        m.group(0), f"!1/*hideArchived*/&&k(", 1
+    )
+    flat = once(
+        text,
+        re.compile(r"\.\.\.(\w+)\?\[\]:(\w+)\.archived\]"),
+        "archived keyboard list",
+    )
+    text = text.replace(flat.group(0), "...[]]", 1)
+    return text
+
+
 def write_js(js_path: Path, text: str) -> None:
     previous = js_path.read_text(encoding="utf-8")
     backup(js_path)
@@ -606,6 +628,7 @@ def patch_js(js_path: Path) -> str:
         updated = apply_session_time(updated)
         updated = apply_group_drop_area(updated)
         updated = apply_session_sort(updated)
+        updated = apply_hide_archived(updated)
         if updated == text:
             return "js already patched"
         write_js(js_path, updated)
@@ -812,6 +835,7 @@ def patch_js(js_path: Path) -> str:
     text = apply_session_time(text)
     text = apply_group_drop_area(text)
     text = apply_session_sort(text)
+    text = apply_hide_archived(text)
 
     write_js(js_path, text)
     return (
