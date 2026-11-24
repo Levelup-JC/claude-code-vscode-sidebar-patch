@@ -13,6 +13,7 @@ Patches:
   Each session's pick is kept in globalState "sessionModels" and given back
   when that session is opened again.
 - Session rows show the absolute time of the last message.
+- Sessions inside a group are ordered by last activity, newest first.
 - A session can be dropped anywhere inside a group, not only on its header.
 - The context pie no longer sends /compact. It tells you to open a new
   thread and run /handoff.
@@ -567,6 +568,25 @@ def apply_group_drop_area(text: str) -> str:
     return text
 
 
+def apply_session_sort(text: str) -> str:
+    """Sessions inside a group are ordered by last activity, newest first."""
+    if "(b.lastModifiedTime.value||0)-(a.lastModifiedTime.value||0)" in text:
+        return text
+    m = once(
+        text,
+        re.compile(
+            r"return\{grouped:(\w+)\.map\(\((\w+)\)=>\(\{group:\2,items:(\w+)\.get\(\2\.id\)\}\)\)"
+        ),
+        "grouped items builder",
+    )
+    groups, g, items = m.group(1), m.group(2), m.group(3)
+    new = (
+        f"return{{grouped:{groups}.map(({g})=>({{group:{g},"
+        f"items:({items}.get({g}.id)||[]).slice().sort((a,b)=>(b.lastModifiedTime.value||0)-(a.lastModifiedTime.value||0))}}))"
+    )
+    return text.replace(m.group(0), new, 1)
+
+
 def write_js(js_path: Path, text: str) -> None:
     previous = js_path.read_text(encoding="utf-8")
     backup(js_path)
@@ -585,6 +605,7 @@ def patch_js(js_path: Path) -> str:
         updated = apply_nest_menu(updated)
         updated = apply_session_time(updated)
         updated = apply_group_drop_area(updated)
+        updated = apply_session_sort(updated)
         if updated == text:
             return "js already patched"
         write_js(js_path, updated)
@@ -790,6 +811,7 @@ def patch_js(js_path: Path) -> str:
     text = apply_nest_menu(text)
     text = apply_session_time(text)
     text = apply_group_drop_area(text)
+    text = apply_session_sort(text)
 
     write_js(js_path, text)
     return (
