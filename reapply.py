@@ -12,6 +12,8 @@ Patches:
   the model into ~/.claude/settings.json, which other running sessions watch.
   Each session's pick is kept in globalState "sessionModels" and given back
   when that session is opened again.
+- Session rows show the absolute time of the last message.
+- A session can be dropped anywhere inside a group, not only on its header.
 - The context pie no longer sends /compact. It tells you to open a new
   thread and run /handoff.
 
@@ -19,10 +21,9 @@ The Marketplace build is minified and replaced on every update, so this
 script retargets the current install by structure, not by old symbol names.
 
 Usage:
-    python3 reapply.py
+    python3 ~/.config/claude-vscode-group-patch/reapply.py
 
 Then in VS Code: Developer: Reload Window.
-To run it automatically after updates, see install-launchagent.sh.
 """
 
 from __future__ import annotations
@@ -493,6 +494,79 @@ def apply_nest_menu(text: str) -> str:
     return text.replace(anchor, helper + anchor, 1)
 
 
+def apply_session_time(text: str) -> str:
+    """Session rows show the absolute time of the last message, not "5m"."""
+    if "getFullYear()===n.getFullYear()" in text:
+        return text
+    m = once(
+        text,
+        re.compile(
+            r"function (\w+)\((\w+)\)\{let \w+=Date\.now\(\)-\2,i=Math\.floor\(\w/1000\),"
+            r"o=Math\.floor\(i/60\),r=Math\.floor\(o/60\),s=Math\.floor\(r/24\),"
+            r"a=Math\.floor\(s/30\),l=Math\.floor\(s/365\);if\(l>0\)return`\$\{l\}y`;"
+            r"if\(a>0\)return`\$\{a\}mo`;if\(s>0\)return`\$\{s\}d`;if\(r>0\)return`\$\{r\}h`;"
+            r"if\(o>0\)return`\$\{o\}m`;return\"now\"\}"
+        ),
+        "relative time formatter",
+    )
+    name, arg = m.group(1), m.group(2)
+    new = (
+        f"function {name}({arg}){{if(!Number.isFinite({arg}))return\"\";"
+        f"let d=new Date({arg}),p=(x)=>String(x).padStart(2,\"0\"),n=new Date();"
+        'return(d.getFullYear()===n.getFullYear()?"":d.getFullYear()+"-")'
+        '+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes())}'
+    )
+    return text.replace(m.group(0), new, 1)
+
+
+def apply_group_drop_area(text: str) -> str:
+    """Drop a session anywhere inside a group, not only on its header."""
+    over_pat = "onDragOver:(ev)=>{if(ev.defaultPrevented||gDrag.current)return;"
+    drop_pat = "onDrop:(ev)=>{if(ev.defaultPrevented||gDrag.current)return;"
+    if over_pat in text:
+        text = text.replace(over_pat, over_pat + "ev.stopPropagation();")
+        text = text.replace(drop_pat, drop_pat + "ev.stopPropagation();")
+        return text
+    head = once(
+        text,
+        re.compile(
+            r'onDragOver:\((\w+)\)=>\{if\(gDrag\.current\)\{gOver\(\1,\w+\.id\);return\}'
+            r'(\w+)\(\1,\{kind:"group",groupId:\w+\.id\}\)\},'
+            r'onDragLeave:\(\1\)=>\{if\(gDrag\.current\)\{gLeave\(\1,\w+\.id\);return\}'
+            r'(\w+)\(\1,\{kind:"group",groupId:\w+\.id\}\)\},'
+            r'onDrop:\(\1\)=>\{if\(gDrag\.current\)\{gDrop\(\1,\w+\.id\);return\}'
+            r'(\w+)\(\1,\{kind:"group",groupId:\w+\.id\}\)\}'
+        ),
+        "group header session drop handlers",
+    )
+    over, leave, drop = head.group(2), head.group(3), head.group(4)
+    def area(gid):
+        return (
+            f'onDragOver:(ev)=>{{if(ev.defaultPrevented||gDrag.current)return;ev.stopPropagation();'
+            f'{over}(ev,{{kind:"group",groupId:{gid}}})}},'
+            f'onDragLeave:(ev)=>{leave}(ev,{{kind:"group",groupId:{gid}}}),'
+            f'onDrop:(ev)=>{{if(ev.defaultPrevented||gDrag.current)return;ev.stopPropagation();'
+            f'{drop}(ev,{{kind:"group",groupId:{gid}}})}}'
+        )
+    old_parent = 'k("div",{className:"group-nest",children:['
+    if text.count(old_parent) != 1:
+        fail("group nest container is not unique")
+    text = text.replace(
+        old_parent,
+        'k("div",{className:"group-nest",' + area("he.id") + ",children:[",
+        1,
+    )
+    old_child = "!cu.collapsed&&ci.map(pN)"
+    if text.count(old_child) != 1:
+        fail("child session list is not unique")
+    text = text.replace(
+        old_child,
+        '!cu.collapsed&&k("div",{className:"group-nest",' + area("cu.id") + ",children:ci.map(pN)})",
+        1,
+    )
+    return text
+
+
 def write_js(js_path: Path, text: str) -> None:
     previous = js_path.read_text(encoding="utf-8")
     backup(js_path)
@@ -509,6 +583,8 @@ def patch_js(js_path: Path) -> str:
         updated = text if HANDOFF_MARKER in text else apply_handoff(text)
         updated = apply_nest(updated)
         updated = apply_nest_menu(updated)
+        updated = apply_session_time(updated)
+        updated = apply_group_drop_area(updated)
         if updated == text:
             return "js already patched"
         write_js(js_path, updated)
@@ -712,6 +788,8 @@ def patch_js(js_path: Path) -> str:
     text = apply_handoff(text)
     text = apply_nest(text)
     text = apply_nest_menu(text)
+    text = apply_session_time(text)
+    text = apply_group_drop_area(text)
 
     write_js(js_path, text)
     return (
